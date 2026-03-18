@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "phantom-memory"
 version = "0.1.0"
-description = "Zero-cost persistent memory for local LLMs — extraction, embedding, dedup, contradiction detection, and an Obsidian-compatible knowledge graph"
+description = "Zero-cost persistent memory for local LLMs — extraction, embedding, contradiction detection, and a self-improving knowledge graph with continuous enrichment"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Nick Mulli" },
 ]
-keywords = ["llm", "memory", "local-llm", "chromadb", "obsidian", "apple-silicon", "ollama", "mlx"]
+keywords = ["llm", "memory", "local-llm", "chromadb", "obsidian", "apple-silicon", "neural-engine", "local-ai", "enrichment", "knowledge-graph"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -32,8 +32,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dashboard = ["aiohttp>=3.9.0"]
 ane = ["coremltools>=7.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+all = ["aiohttp>=3.9.0"]
 
 [project.scripts]
 phantom = "phantom.cli:main"

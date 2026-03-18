@@ -69,6 +69,49 @@ class RegexClassifier:
         return self._classify(text)
 
 
+class ANEClassifier:
+    """Hybrid classifier: regex for type classification + ANE for analysis.
+
+    The 1.7B model is excellent at analysis/extraction/summarization but
+    unreliable for constrained single-word classification (always says "decision").
+    So we keep regex for classify() and add analyze() for richer tasks.
+    """
+
+    VALID_TYPES = {"decision", "task", "preference", "quantitative", "general"}
+
+    def __init__(self, socket_path: str = "/tmp/orion-ane-server.sock"):
+        self._socket_path = socket_path
+        self._regex = RegexClassifier()
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            from phantom.ane_server import ANEClient
+            self._client = ANEClient(self._socket_path)
+        return self._client
+
+    def classify(self, text: str) -> str:
+        """Classify using regex (fast, reliable for type detection)."""
+        return self._regex.classify(text)
+
+    def analyze(self, prompt: str, max_tokens: int = 100) -> str:
+        """Run generative analysis on ANE (entity profiles, relationships, summaries)."""
+        try:
+            client = self._get_client()
+            return client.analyze(prompt, max_tokens=max_tokens)
+        except Exception as e:
+            return f"[ANE unavailable: {e}]"
+
+    @property
+    def has_ane(self) -> bool:
+        """Check if ANE server is available for analysis."""
+        try:
+            self._get_client().ping()
+            return True
+        except Exception:
+            return False
+
+
 class CPUEmbedder:
     """Default embedder using sentence-transformers on CPU."""
 
@@ -575,6 +618,21 @@ class SweepEngine:
                                  if self.vault._entity_filename(e))
                 if links:
                     profile_lines.append(f"> - Related: {links}")
+
+            # ANE-enhanced summary: use 1.7B model for intelligent profile
+            if hasattr(self.classifier, 'has_ane') and self.classifier.has_ane:
+                try:
+                    facts_text = "\n".join(f"- {l.split('] ', 1)[1] if '] ' in l else l}" for l in fact_lines[:20])
+                    summary = self.classifier.analyze(
+                        f"Write a 2-sentence summary of this entity based on these facts:\n"
+                        f"Entity: {entity_name}\n{facts_text}",
+                        max_tokens=80,
+                    )
+                    if summary and not summary.startswith("[ANE"):
+                        profile_lines.append(f"> ")
+                        profile_lines.append(f"> *{summary.strip()}*")
+                except Exception:
+                    pass  # Silently skip ANE summary on error
 
             profile_lines.append("")
 

@@ -1,215 +1,289 @@
-# ◈ Phantom Memory
+# Phantom Memory
 
-**Zero-cost persistent memory for local LLMs.**
+Zero-cost persistent memory for local LLMs — extraction, embedding, and a continuous enrichment loop that organizes your knowledge while you sleep.
 
-Every local LLM forgets everything between sessions. Phantom fixes that with a background daemon that extracts facts, embeds them, detects contradictions, and writes a human-readable knowledge graph — all while your GPU runs undisturbed.
+Mem0 stores facts. **Phantom thinks about them.**
 
-```bash
-pip install phantom-memory
-```
+## The Pitch
 
-```python
-from phantom import MemoryDaemon
+Every local LLM forgets. Phantom remembers. But it doesn't just store facts — it thinks about them. A continuous enrichment loop reclassifies, builds relationships, detects staleness, finds cross-entity patterns, and consolidates profiles. Your vault gets smarter while you sleep.
 
-daemon = MemoryDaemon()
-daemon.start()
-
-daemon.ingest("user", "Cross-default threshold is $75M for Counterparty Alpha")
-results = daemon.recall("what's the threshold?")
-# → [{"text": "Cross-default threshold is $75M...", "score": 0.89, ...}]
-
-daemon.stop()
-```
-
-## How It Works
-
-Phantom runs three tiers concurrently on Apple Silicon (CPU tiers work on any hardware):
-
-| Tier | Hardware | What It Does | Speed |
-|------|----------|-------------|-------|
-| **Extraction** | CPU | Regex-based fact extraction, type classification, noise filtering | Instant |
-| **Embedding** | CPU | sentence-transformers (22M params) → ChromaDB vector store | 1,721 emb/sec |
-| **Classification** | ANE *(optional)* | CoreML fact classifier on Neural Engine | Zero GPU cost |
-
-**Your GPU is never touched.** The daemon runs in a background thread. We measured -4.2% GPU throughput impact — within noise.
-
-### What Gets Extracted
-
-Every conversation turn is parsed for:
-- **Entities** — companies, people, financial instruments, legal provisions
-- **Quantities** — dollar amounts, percentages, time periods
-- **Decisions** — "we decided to...", "going with...", "approved..."
-- **Tasks** — "need to...", "deadline is...", "follow up on..."
-- **Preferences** — "we always use...", "our policy is..."
-
-Noise is filtered automatically. "Sure, sounds good" and "I can help with that" don't pollute your memory.
-
-### Deduplication & Contradiction Detection
-
-- **Dedup**: Facts above 95% cosine similarity are skipped
-- **Contradictions**: When a new fact about the same entities has different quantities (e.g., "threshold is $50M" → "threshold increased to $75M"), the old fact is marked as **superseded**
-- **Temporal decay**: 7-day half-life — recent facts score higher than old ones
-
-### Obsidian-Compatible Knowledge Graph
-
-Every fact is written to structured markdown files:
+Three processors. Three loops. Zero contention.
 
 ```
-vault/
-  memory/
-    entities/
-      Counterparty-Alpha.md    # All facts about this entity
-      ISDA-Master-Agreement.md
-    decisions/
-      decisions.md             # All decisions, chronological
-    tasks/
-      tasks.md                 # Open tasks and deadlines
-    preferences/
-      preferences.md           # User/team preferences
-    sessions/
-      2026-03-17-1430.md       # Per-session summaries
+┌─ GPU ────────────────────────────────────┐
+│  Your LLM — conversation + reasoning     │
+└──────────────────────────────────────────┘
+┌─ CPU ────────────────────────────────────┐
+│  Memory Daemon — extract, embed, store   │
+│  1,721 emb/sec, zero GPU impact          │
+└──────────────────────────────────────────┘
+┌─ ANE (optional) ────────────────────────┐
+│  Enricher — classify, relate, analyze    │
+│  Always-on, ~2W, zero GPU impact         │
+└──────────────────────────────────────────┘
 ```
 
-Entity files use Obsidian `[[wikilinks]]` for cross-referencing. Superseded facts get ~~strikethrough~~ with timestamps.
+## Dashboard
+
+![Phantom Memory Dashboard](dashboard_screenshot.png)
+
+Real-time visualization of the knowledge graph, activity feed, memory stats, fact type distribution, and recent decisions. Dark cyberpunk UI at `http://localhost:8422`.
 
 ## Quick Start
 
-### With Ollama
-
 ```python
 from phantom import MemoryDaemon
 
-daemon = MemoryDaemon(vault_path="~/obsidian/vault")
+# Basic — memory only
+daemon = MemoryDaemon(vault_path="~/vault")
 daemon.start()
 
-# Your existing Ollama chat loop
-response = requests.post("http://localhost:11434/api/chat", json={...})
+# Full stack — memory + enricher (recommended)
+daemon = MemoryDaemon(vault_path="~/vault", enable_enricher=True)
+daemon.start()
 
-# Add these two lines to your loop:
-daemon.ingest("user", user_message)
-daemon.ingest("assistant", response_text)
+# Custom enricher interval (default 300s)
+daemon = MemoryDaemon(
+    vault_path="~/vault",
+    enable_enricher=True,
+    enricher_interval=60,  # seconds
+)
+daemon.start()
 
-# Before each request, inject memories:
-context = daemon.recall_formatted(user_message)
-# → "## Relevant Memories\n- [decision] Threshold set at $75M (score=0.89)"
+# Ingest conversation turns
+daemon.ingest("user", "We agreed to set the cross-default threshold at $75M for Counterparty Alpha")
+daemon.ingest("assistant", "Noted. That's higher than the $50M standard for BBB+ entities.")
+
+# Semantic recall
+results = daemon.recall("cross-default thresholds")
+
+# One-shot enrichment (run all sweeps once, then exit)
+daemon.enrich_once()
 ```
 
-See [`examples/`](examples/) for complete working examples with Ollama, MLX, and any OpenAI-compatible server.
+## Continuous Enrichment
 
-### CLI
+This is the headline feature. Five sweeps run continuously in the background, analyzing and improving your vault:
 
-```bash
-# Start daemon + web dashboard
-phantom start --vault ~/obsidian/vault
+| Sweep | What it does | Status |
+|-------|-------------|--------|
+| **RECLASSIFY** | Fixes facts filed as "general" that should be decision/task/preference/quantitative | Working |
+| **RELATE** | Builds entity relationship graph + `graph.json` | Working — 40+ relationships found |
+| **STALE** | Flags outdated time-sensitive facts (deadlines, "by Friday", temporal refs) | Working |
+| **PATTERNS** | Cross-entity analysis — outliers, similar profiles, recurring provisions | Working — 35 insights generated |
+| **CONSOLIDATE** | Auto-generates entity profile summaries pinned to top of entity pages | Working |
 
-# Search memories
-phantom recall "cross-default threshold"
-
-# Check stats
-phantom stats
-
-# Manually ingest a fact
-phantom ingest "Meeting with John at 3pm tomorrow"
-```
-
-### Dashboard
-
-The web dashboard at `http://localhost:8422` shows:
-- **Knowledge Graph** — all entities with fact counts
-- **Activity Feed** — real-time fact extraction with type color coding
-- **System Stats** — memory counts, dedup rates, contradiction tracking
-- **Decisions & Tasks** — filtered views of actionable items
-
-## Architecture
+### What Gets Created in the Vault
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Your LLM (Ollama / MLX / LM Studio / vLLM)    │  ← GPU, undisturbed
-└──────────────────────┬──────────────────────────┘
-                       │ conversation turns
-                       ▼
-┌─────────────────────────────────────────────────┐
-│  Phantom Daemon (background thread)             │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ Extractor │→│ Embedder │→│ ChromaDB     │  │  ← CPU only
-│  │ (regex)   │  │ (22M)    │  │ (vector DB)  │  │
-│  └──────────┘  └──────────┘  └──────┬───────┘  │
-│                                      │          │
-│  ┌──────────────────────────────────┐│          │
-│  │ Vault Writer (Obsidian markdown) ││          │  ← disk I/O
-│  └──────────────────────────────────┘│          │
-│                                      │          │
-│  ┌──────────────────────────────────┐│          │
-│  │ Contradiction Detector           ││          │  ← CPU
-│  │ (supersedes old facts)           ││          │
-│  └──────────────────────────────────┘│          │
-└─────────────────────────────────────────────────┘
+vault/memory/
+├── relationships.md          # Entity graph with wikilinks
+├── graph.json                # Machine-readable graph (for dashboard/agent consumption)
+├── insights/
+│   ├── patterns-2026-03-18.md  # Cross-entity analysis
+│   └── stale-2026-03-18.md     # Staleness flags
+├── entities/
+│   ├── counterparty-alpha.md   # Auto-generated profile at top
+│   ├── jpmorgan.md
+│   └── ...
+├── facts/
+├── decisions/
+├── preferences/
+└── tasks/
 ```
+
+### Sample Insight Note
+
+What Phantom produces overnight while your LLM is idle:
+
+```markdown
+# ◈ Phantom Insights — 2026-03-18
+
+## Threshold Inconsistencies
+- Counterparty Alpha: $75M cross-default (BBB+)
+- Counterparty Beta: $50M cross-default (BBB+)
+- Same rating, 50% threshold difference. Intentional?
+
+## Stale Items
+- "Draft counter-proposal by Friday" (from March 14) — likely past
+
+## Entity Summaries Updated
+- Counterparty Alpha: 47 facts → 5-line profile (updated overnight)
+```
+
+### ANE-Ready Architecture
+
+`Classifier` and `Embedder` are protocols — swap in a CoreML model with zero changes to sweep logic:
+
+```python
+class Classifier(Protocol):
+    def classify(self, text: str) -> str: ...
+
+class Embedder(Protocol):
+    def embed(self, texts: list[str]) -> np.ndarray: ...
+```
+
+Currently runs on CPU with heuristics. On Apple Silicon with a CoreML model loaded, classification runs on the Neural Engine at ~2W with zero GPU impact.
+
+## How Memory Works
+
+### Extraction
+
+Every conversation turn passes through `FactExtractor`:
+- Regex-based entity detection (organizations, people, amounts, dates)
+- Fact type classification (decision, task, preference, quantitative, general)
+- Quantity parsing ($75M, 50 basis points, etc.)
+- Deduplication against existing memories via cosine similarity
+
+### Embedding & Storage
+
+- **sentence-transformers** (`all-MiniLM-L6-v2`, 22M params) on CPU
+- 1,721 embeddings/sec — fast enough that ANE isn't needed for this tier
+- **ChromaDB** for persistent vector storage with cosine similarity search
+- Semantic recall: query in natural language, get relevant facts ranked by relevance
+
+### Vault Writing
+
+Extracted facts are written as structured markdown to an Obsidian-compatible vault:
+- One file per entity, fact, decision, task
+- Wikilinks between related entities
+- Machine-readable frontmatter (type, date, entities, confidence)
 
 ## Benchmarks
 
-Tested on MacBook Air M5 (16GB) running Qwen 3.5 9B via MLX:
+### Three-Tier Eval Suite (22/22)
 
-| Metric | Value |
-|--------|-------|
-| Embedding speed | 1,721 embeddings/sec (CPU) |
-| GPU impact during daemon operation | -4.2% (within noise) |
-| Fact extraction | Instant (regex, no model) |
-| Retrieval accuracy at 526 facts | 88.9% |
-| Contradiction detection | 0% leaked (40% → 0% with supersession) |
-| Memory overhead | ~180 MB (embedding model + ChromaDB) |
-
-## Apple Silicon Bonus
-
-On Apple Silicon, Phantom can optionally use the **Neural Engine** for fact classification at zero GPU cost. Enable with:
-
-```python
-daemon = MemoryDaemon(vault_path="~/vault")
-# ANE classifier at port 8423 (when available)
+```
+CPU (extraction + recall) ....... 12/12 (100%)
+ANE (1.7B analysis) ............  5/5  (100%)
+GPU (9B reasoning) .............  5/5  (100%)
+TOTAL .......................... 22/22 (100%)
+Completed in 45.1s
 ```
 
-The ANE tier is completely optional. Everything works on CPU alone — Linux, Windows, Intel Macs, whatever. Apple Silicon users just get an extra gear.
+**CPU tier tests:** Fact extraction (all 4 types from ISDA paragraph), entity detection (10 entities including Counterparty Alpha), semantic recall accuracy, type filtering, noise rejection.
+
+**ANE tier tests:** Entity summarization (JPMorgan profile), relationship extraction (4 entities), risk identification (low cross-default threshold), quantity extraction (4 dollar amounts from CSA text). All under 2 seconds.
+
+**GPU tier tests:** Domain explanation (5/6 terms), risk comparison, JSON generation, tool call formatting.
+
+Run it yourself:
+```bash
+phantom eval
+```
+
+### Concurrent Performance
+
+GPU inference runs at full speed while the memory daemon processes in background:
+
+| Scenario | GPU tok/s | Impact |
+|----------|-----------|--------|
+| GPU alone | 24.4-25.0 | baseline |
+| GPU + daemon (20 embeddings) | 25.4 | -4.2% (noise) |
+| GPU + daemon (100 embeddings) | 25.9 | -3.6% (noise) |
+
+Near-zero contention measured (~3.8% average). 18 facts extracted and stored while the GPU generated at full speed.
+
+### Embedding Throughput
+
+| Model | Params | Speed | Hardware |
+|-------|--------|-------|----------|
+| all-MiniLM-L6-v2 | 22M | 1,721 emb/sec | CPU |
+
+## Agent Self-Knowledge (Playbook)
+
+When integrated with the Phantom agent framework, the agent maintains a self-assessment document (`playbook.md`) it reads at boot and updates after every task:
+
+- **Scan schedule** with timestamps (last run, next due)
+- **What works / what doesn't** — learned from experience, not hardcoded
+- **High-signal sources** — builds over time as the agent discovers useful feeds
+- **Self-eval metrics** — tracks accuracy, tool chain success rates, noise ratio
+- **Improvement queue** — next things to try
+- **Lessons learned** — persistent behavioral memory
+
+The playbook lives in the vault (visible in Obsidian) and survives restarts. The agent reads it at boot, follows it during tasks, and writes back what it learned. This is how the agent gets better across sessions.
 
 ## API Reference
 
-### `MemoryDaemon`
+### MemoryDaemon
 
 ```python
 daemon = MemoryDaemon(
-    vault_path="~/vault",           # Obsidian vault path (default: ./phantom_vault)
-    db_path="~/phantom_db",         # ChromaDB path (default: auto)
-    session_id="my-session",        # Session identifier (default: timestamp)
-    embedding_model="all-MiniLM-L6-v2"  # Any sentence-transformers model
+    vault_path: str,              # Path to Obsidian vault
+    db_path: str = None,          # ChromaDB path (default: ./chromadb_live)
+    enable_enricher: bool = False, # Start continuous enrichment loop
+    enricher_interval: int = 300,  # Seconds between enrichment sweeps
 )
 
-daemon.start()                      # Start background processing
-daemon.ingest("user", "text")       # Feed a conversation turn (non-blocking)
-daemon.recall("query", n_results=5) # Semantic search with temporal decay
-daemon.recall_formatted("query")    # Pre-formatted for LLM context injection
-daemon.stats                        # {"stored": 42, "deduped": 3, ...}
-daemon.stop()                       # Stop and write session summary
+daemon.start()                    # Boot daemon + enricher (if enabled)
+daemon.stop()                     # Shutdown gracefully
+
+daemon.ingest(role, text)         # Extract facts from text, embed, store, write to vault
+daemon.recall(query, n=5, type_filter="")  # Semantic search over memories
+daemon.stats()                    # {extracted, stored, deduped, superseded, total_memories}
+daemon.enrich_once()              # Run all 5 enrichment sweeps once
 ```
 
-### `MemoryStore` (direct access)
+### PhantomEnricher
 
 ```python
-from phantom import MemoryStore
+from phantom.enricher import PhantomEnricher
 
-store = MemoryStore(db_path="~/phantom_db")
-store.recall("what's the threshold?", n_results=5)
-store.count()  # total facts stored
+enricher = PhantomEnricher(
+    store=memory_store,           # MemoryStore instance (ChromaDB)
+    vault=vault_writer,           # VaultWriter instance
+    interval=300,                 # Seconds between sweeps
+)
+
+enricher.start()                  # Background thread, runs forever
+enricher.stop()
+enricher.run_once()               # One-shot: all 5 sweeps, then return
 ```
 
-### `FactExtractor` (standalone)
+### SweepEngine
 
 ```python
-from phantom import FactExtractor
+from phantom.enricher import SweepEngine
 
-extractor = FactExtractor()
-facts = extractor.extract("The threshold is $75M for Counterparty Alpha")
-# [{"text": "...", "type": "quantitative", "entities": ["Counterparty Alpha"], "quantities": ["$75M"]}]
+engine = SweepEngine(store=memory_store, vault=vault_writer)
+engine.sweep_reclassify()         # Fix mistyped facts
+engine.sweep_relate()             # Build relationship graph
+engine.sweep_stale()              # Flag outdated facts
+engine.sweep_patterns()           # Cross-entity anomaly detection
+engine.sweep_consolidate()        # Generate entity profiles
 ```
+
+## Apple Silicon Bonus
+
+On Macs with Apple Silicon, the three tiers map to physically separate processors:
+
+- **GPU** (Metal) — your main LLM, fully utilized during conversation
+- **CPU** (Efficiency cores) — embedding + extraction, negligible power draw
+- **ANE** (Neural Engine) — enricher classification, ~2W, completely independent bus
+
+This isn't software concurrency — it's hardware parallelism. The ANE has its own data path to unified memory. The enricher literally cannot slow down your LLM.
+
+## Install
+
+```bash
+git clone https://github.com/MidasMulli/phantom-memory.git
+cd phantom-memory
+pip install -e ".[all]"
+```
+
+Requires Python 3.10+ and macOS (tested on M4/M5 Apple Silicon, works on Intel with CPU-only).
+
+Dependencies installed automatically: ChromaDB, sentence-transformers, numpy, aiohttp.
+
+Optional for ANE tier:
+- CoreML model converted via [ANEMLL](https://github.com/Anemll/Anemll)
+- `pip install -e ".[ane]"` for coremltools
 
 ## License
 
 MIT
+
+---
+
+*Built by a human + Claude, one weekend at a time.*

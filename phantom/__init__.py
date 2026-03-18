@@ -14,7 +14,14 @@ Usage:
 """
 
 from phantom.daemon import MemoryDaemon, FactExtractor, MemoryStore, VaultWriter
-from phantom.enricher import PhantomEnricher
+from phantom.enricher import PhantomEnricher, SweepEngine
 
 __version__ = "0.1.0"
-__all__ = ["MemoryDaemon", "FactExtractor", "MemoryStore", "VaultWriter", "PhantomEnricher"]
+__all__ = [
+    "MemoryDaemon",
+    "FactExtractor",
+    "MemoryStore",
+    "VaultWriter",
+    "PhantomEnricher",
+    "SweepEngine",
+]
