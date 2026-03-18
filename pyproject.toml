@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "phantom-memory"
+version = "0.1.0"
+description = "Zero-cost persistent memory for local LLMs — extraction, embedding, dedup, contradiction detection, and an Obsidian-compatible knowledge graph"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Nick Mulli" },
+]
+keywords = ["llm", "memory", "local-llm", "chromadb", "obsidian", "apple-silicon", "ollama", "mlx"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "chromadb>=0.4.0",
+    "sentence-transformers>=2.0.0",
+    "numpy>=1.24.0",
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+ane = ["coremltools>=7.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+
+[project.scripts]
+phantom = "phantom.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/MidasMulli/phantom-memory"
+Repository = "https://github.com/MidasMulli/phantom-memory"
+Issues = "https://github.com/MidasMulli/phantom-memory/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["phantom"]
