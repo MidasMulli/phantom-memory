@@ -227,17 +227,23 @@ class FactExtractor:
                 result.append(p)
         return result
 
-    def _classify_type(self, sentence: str) -> str:
+    @classmethod
+    def classify_type(cls, sentence: str) -> str:
+        """Classify a sentence into a fact type. Classmethod so enricher can call it."""
         s_lower = sentence.lower()
-        if any(m in s_lower for m in self.DECISION_MARKERS):
+        if any(m in s_lower for m in cls.DECISION_MARKERS):
             return "decision"
-        if any(m in s_lower for m in self.TASK_MARKERS):
+        if any(m in s_lower for m in cls.TASK_MARKERS):
             return "task"
-        if any(m in s_lower for m in self.PREFERENCE_MARKERS):
+        if any(m in s_lower for m in cls.PREFERENCE_MARKERS):
             return "preference"
-        if self.QUANTITY_PATTERN.search(sentence):
+        if cls.QUANTITY_PATTERN.search(sentence):
             return "quantitative"
         return "general"
+
+    # Keep backward compat
+    def _classify_type(self, sentence: str) -> str:
+        return self.classify_type(sentence)
 
     def _extract_entities(self, sentence: str) -> list[str]:
         """Extract named entities using domain-specific patterns."""
@@ -410,6 +416,20 @@ class MemoryStore:
 
     def count(self) -> int:
         return self.collection.count()
+
+    def get_by_type(self, fact_type: str, limit: int = 100, offset: int = 0) -> dict:
+        """Get facts filtered by type. Used by enricher for batch processing."""
+        return self.collection.get(
+            where={"type": fact_type}, limit=limit, offset=offset,
+            include=["documents", "metadatas", "embeddings"],
+        )
+
+    def get_all(self, limit: int = 500, offset: int = 0) -> dict:
+        """Get all facts. Used by enricher for sweeps."""
+        return self.collection.get(
+            limit=limit, offset=offset,
+            include=["documents", "metadatas"],
+        )
 
     def _is_duplicate(self, embedding) -> bool:
         try:
@@ -680,7 +700,8 @@ class MemoryDaemon:
     """
 
     def __init__(self, vault_path: str = None, db_path: str = None,
-                 session_id: str = None, embedding_model: str = "all-MiniLM-L6-v2"):
+                 session_id: str = None, embedding_model: str = "all-MiniLM-L6-v2",
+                 enable_enricher: bool = False, enricher_interval: int = 300):
         self.session_id = session_id or datetime.now().strftime("%Y-%m-%d-%H%M")
 
         if vault_path is None:
@@ -698,6 +719,11 @@ class MemoryDaemon:
         # Tier 2: Vault organization
         self.vault = VaultWriter(vault_path)
 
+        # Tier 3: Enricher (optional, always-on background intelligence)
+        self._enable_enricher = enable_enricher
+        self._enricher_interval = enricher_interval
+        self.enricher = None
+
         # Processing queue and thread
         self._queue = queue.Queue()
         self._running = False
@@ -711,12 +737,25 @@ class MemoryDaemon:
         self._thread = threading.Thread(target=self._process_loop, daemon=True)
         self._thread.start()
 
+        # Start enricher if enabled
+        if self._enable_enricher:
+            from phantom.enricher import PhantomEnricher
+            self.enricher = PhantomEnricher(
+                store=self.store, vault=self.vault,
+                interval=self._enricher_interval,
+            )
+            self.enricher.start()
+
     def stop(self):
         """Stop the daemon and write session summary."""
         self._running = False
         self._queue.put(None)
         if self._thread:
             self._thread.join(timeout=5)
+
+        # Stop enricher
+        if self.enricher:
+            self.enricher.stop()
 
         if self._session_facts:
             self.vault.write_session_summary(self.session_id, self._session_facts)
